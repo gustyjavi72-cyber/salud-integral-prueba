@@ -143,23 +143,202 @@ function analyze(){
 }
 </script>
 <script>
-// Prueba PPG experimental: no guarda imágenes, señales ni resultados.
+
+<script>
+// Prueba PPG experimental de pulso: duración de 20 segundos.
 (()=>{
- const video=document.getElementById('pulseVideo'), canvas=document.getElementById('pulseCanvas');
+ const video=document.getElementById('pulseVideo');
+ const canvas=document.getElementById('pulseCanvas');
  const ctx=canvas.getContext('2d',{willReadFrequently:true});
- const status=document.getElementById('cameraStatus'), estimate=document.getElementById('pulseEstimate');
- const start=document.getElementById('startPulse'), stop=document.getElementById('stopPulse');
- let stream=null, track=null, raf=0, samples=[], lastSample=0, torchOn=false;
- function message(t,cls=''){status.className='result '+cls;status.textContent=t;}
- async function endTest(){cancelAnimationFrame(raf);raf=0;if(track&&torchOn){try{await track.applyConstraints({advanced:[{torch:false}]});}catch(e){}}if(stream){stream.getTracks().forEach(t=>t.stop());}stream=null;track=null;torchOn=false;samples=[];video.srcObject=null;video.style.display='none';estimate.textContent='—';start.disabled=false;stop.disabled=true;}
- function sample(now){if(!stream)return;if(now-lastSample>55){lastSample=now;try{ctx.drawImage(video,0,0,canvas.width,canvas.height);const d=ctx.getImageData(0,0,canvas.width,canvas.height).data;let r=0,g=0,b=0,n=0;for(let i=0;i<d.length;i+=16){r+=d[i];g+=d[i+1];b+=d[i+2];n++;}samples.push({t:now,v:r/n});if(samples.length>260)samples.shift();if(samples.length>100){const tail=samples.slice(-180);const mean=tail.reduce((a,x)=>a+x.v,0)/tail.length;const deviations=tail.map(x=>x.v-mean);const smooth=deviations.map((v,i)=>{let a=0,c=0;for(let j=Math.max(0,i-2);j<=Math.min(deviations.length-1,i+2);j++){a+=deviations[j];c++;}return a/c;});let peaks=[];for(let i=2;i<smooth.length-2;i++){if(smooth[i]>smooth[i-1]&&smooth[i]>=smooth[i+1]&&smooth[i]>0){const t=tail[i].t;if(!peaks.length||t-peaks[peaks.length-1]>350)peaks.push(t);}}if(peaks.length>=3){const intervals=[];for(let i=1;i<peaks.length;i++){const dt=peaks[i]-peaks[i-1];if(dt>=350&&dt<=1500)intervals.push(dt);}if(intervals.length>=2){intervals.sort((a,b)=>a-b);const bpm=Math.round(60000/intervals[Math.floor(intervals.length/2)]);estimate.textContent=(bpm>=40&&bpm<=180)?bpm+' lpm (experimental)':'Buscando señal…';}else estimate.textContent='Buscando señal…';}else estimate.textContent='Buscando señal…';}}
- catch(e){message('No se pudo leer la cámara. Detené la prueba e intentá nuevamente.','warn');}}
- raf=requestAnimationFrame(sample);}
- start.addEventListener('click',async()=>{if(!navigator.mediaDevices?.getUserMedia){message('Este navegador no permite acceder a la cámara. Probá con Chrome actualizado y una página HTTPS.','warn');return;}start.disabled=true;message('Solicitando permiso para usar la cámara…');try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:640},height:{ideal:480}}});video.srcObject=stream;video.style.display='block';await video.play();track=stream.getVideoTracks()[0];try{const caps=track.getCapabilities?.();if(caps?.torch){await track.applyConstraints({advanced:[{torch:true}]});torchOn=true;message('Cámara y flash activados. Cubrí suavemente la cámara y el flash con la yema del dedo, sin presionar.','good');}else{message('Cámara activada, pero este celular/navegador no ofrece control del flash. Cubrí la cámara con la yema y comprobá si recibe luz.','warn');}}catch(e){message('Cámara activada. No se pudo encender el flash desde el navegador; seguiremos comprobando la señal disponible.','warn');}stop.disabled=false;samples=[];lastSample=0;raf=requestAnimationFrame(sample);}catch(e){await endTest();message(e.name==='NotAllowedError'?'No se concedió permiso para la cámara. Permitilo en Chrome para continuar.':'No se pudo iniciar la cámara. Comprobá que otra aplicación no la esté usando y probá con HTTPS.','bad');}});
- stop.addEventListener('click',async()=>{await endTest();message('Prueba detenida. No se guardó ningún dato.');});
- window.addEventListener('pagehide',()=>{if(stream)stream.getTracks().forEach(t=>t.stop());});
+ const status=document.getElementById('cameraStatus');
+ const estimate=document.getElementById('pulseEstimate');
+ const start=document.getElementById('startPulse');
+ const stop=document.getElementById('stopPulse');
+ const progressText=document.getElementById('pulseProgressText');
+ const progressBar=document.getElementById('pulseProgressBar');
+
+ const DURATION=20000;
+ let stream=null, track=null, raf=0, samples=[];
+ let lastSample=0, torchOn=false, startTime=0, running=false;
+
+ function message(t,cls=''){
+   status.className='result '+cls;
+   status.textContent=t;
+ }
+
+ function progress(value){
+   const pct=Math.max(0,Math.min(100,Math.round(value)));
+   progressText.textContent=pct+'%';
+   progressBar.style.width=pct+'%';
+ }
+
+ async function endCamera(){
+   cancelAnimationFrame(raf);
+   raf=0;
+   if(track&&torchOn){
+     try{await track.applyConstraints({advanced:[{torch:false}]});}catch(e){}
+   }
+   if(stream)stream.getTracks().forEach(t=>t.stop());
+   stream=null;track=null;torchOn=false;
+   video.srcObject=null;
+   video.style.display='none';
+   running=false;
+   start.disabled=false;
+   stop.disabled=true;
+ }
+
+ function calculatePulse(){
+   if(samples.length<100)return null;
+
+   const tail=samples.slice(-180);
+   const mean=tail.reduce((a,x)=>a+x.v,0)/tail.length;
+   const deviations=tail.map(x=>x.v-mean);
+
+   const smooth=deviations.map((v,i)=>{
+     let a=0,c=0;
+     for(let j=Math.max(0,i-2);j<=Math.min(deviations.length-1,i+2);j++){
+       a+=deviations[j];c++;
+     }
+     return a/c;
+   });
+
+   const peaks=[];
+   for(let i=2;i<smooth.length-2;i++){
+     if(smooth[i]>smooth[i-1]&&smooth[i]>=smooth[i+1]&&smooth[i]>0){
+       const t=tail[i].t;
+       if(!peaks.length||t-peaks[peaks.length-1]>350)peaks.push(t);
+     }
+   }
+
+   const intervals=[];
+   for(let i=1;i<peaks.length;i++){
+     const dt=peaks[i]-peaks[i-1];
+     if(dt>=350&&dt<=1500)intervals.push(dt);
+   }
+
+   if(intervals.length<3)return null;
+
+   intervals.sort((a,b)=>a-b);
+   const bpm=Math.round(60000/intervals[Math.floor(intervals.length/2)]);
+   return bpm>=40&&bpm<=180?bpm:null;
+ }
+
+ async function finishTest(){
+   cancelAnimationFrame(raf);
+   raf=0;
+   progress(100);
+   const bpm=calculatePulse();
+   await endCamera();
+
+   if(bpm){
+     estimate.textContent=bpm+' lpm (estimación experimental)';
+     message('Análisis finalizado. Mantené presente que este resultado no es una medición médica.','good');
+   }else{
+     estimate.textContent='Sin resultado confiable';
+     message('No se obtuvo una señal suficiente. Podés repetir la prueba manteniendo el dedo quieto, sin presionar.','warn');
+   }
+ }
+
+ function sample(now){
+   if(!running)return;
+
+   const elapsed=now-startTime;
+   progress(elapsed/DURATION*100);
+
+   if(elapsed>=DURATION){
+     finishTest();
+     return;
+   }
+
+   if(now-lastSample>55){
+     lastSample=now;
+     try{
+       ctx.drawImage(video,0,0,canvas.width,canvas.height);
+       const d=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+       let r=0,n=0;
+       for(let i=0;i<d.length;i+=16){
+         r+=d[i];
+         n++;
+       }
+       samples.push({t:now,v:r/n});
+       if(samples.length>260)samples.shift();
+     }catch(e){
+       message('No se pudo leer la cámara. Detené la prueba e intentá nuevamente.','warn');
+     }
+   }
+
+   raf=requestAnimationFrame(sample);
+ }
+
+ start.addEventListener('click',async()=>{
+   if(!navigator.mediaDevices?.getUserMedia){
+     message('Este navegador no permite acceder a la cámara. Probá con Chrome actualizado y una página HTTPS.','warn');
+     return;
+   }
+
+   start.disabled=true;
+   estimate.textContent='—';
+   progress(0);
+   message('Solicitando permiso para usar la cámara…');
+
+   try{
+     stream=await navigator.mediaDevices.getUserMedia({
+       audio:false,
+       video:{
+         facingMode:{ideal:'environment'},
+         width:{ideal:640},
+         height:{ideal:480}
+       }
+     });
+
+     video.srcObject=stream;
+     video.style.display='block';
+     await video.play();
+     track=stream.getVideoTracks()[0];
+
+     try{
+       const caps=track.getCapabilities?.();
+       if(caps?.torch){
+         await track.applyConstraints({advanced:[{torch:true}]});
+         torchOn=true;
+         message('Cámara y flash activados. Mantené el dedo quieto, sin presionar.','good');
+       }else{
+         message('Cámara activada. Este dispositivo no permite controlar el flash desde aquí. Mantené el dedo quieto.','warn');
+       }
+     }catch(e){
+       message('Cámara activada. No se pudo encender el flash. Mantené el dedo quieto.','warn');
+     }
+
+     samples=[];
+     lastSample=0;
+     startTime=performance.now();
+     running=true;
+     stop.disabled=false;
+     raf=requestAnimationFrame(sample);
+
+   }catch(e){
+     await endCamera();
+     message(e.name==='NotAllowedError'
+       ?'No se concedió permiso para la cámara. Permitilo para continuar.'
+       :'No se pudo iniciar la cámara. Comprobá que otra aplicación no la esté usando y probá con HTTPS.','bad');
+   }
+ });
+
+ stop.addEventListener('click',async()=>{
+   await endCamera();
+   progress(0);
+   estimate.textContent='—';
+   samples=[];
+   message('Prueba detenida. No se guardó ningún dato.');
+ });
+
+ window.addEventListener('pagehide',()=>{
+   if(stream)stream.getTracks().forEach(t=>t.stop());
+ });
 })();
 </script>
+
+
 <script>if('serviceWorker' in navigator && location.protocol.startsWith('http')){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));}</script>
 </body>
 </html>
