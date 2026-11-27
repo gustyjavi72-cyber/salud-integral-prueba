@@ -55,11 +55,13 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin:20px 0}
 <div class="result" aria-live="polite">
   <div style="display:flex;justify-content:space-between;gap:10px">
     <b>Progreso del análisis</b>
-   
- <b id="pulseProgressText">0%</b>  </div>
-  <d<div idiv style="height:12px;background:#dce6e9;border-radius:999px;overflow:hidden;margin-top:8px">
-  </div> ="pulseProgressBar" style="height:100%;width:0%;background:#18794e;border-radius:999px;transition:width .2s"></div>
+    <b id="pulseProgressText">0%</b>
+  </div>
+  <div style="height:12px;background:#dce6e9;border-radius:999px;overflow:hidden;margin-top:8px">
+    <div id="pulseProgressBar" style="height:100%;width:0%;background:#18794e;border-radius:999px;transition:width .2s"></div>
+  </div>
 </div>
+  
   <div class="row"><button class="btn" id="startPulse" type="button">Iniciar prueba</button><button class="btn secondary" id="stopPulse" type="button" disabled>Detener</button></div>
   <div class="result" aria-live="polite"><b>Pulso estimado:</b> <span id="pulseEstimate">—</span></div>
   <p class="muted">Los datos se procesan temporalmente en esta pantalla y se descartan al detener la prueba o cerrar la página. Algunos celulares o navegadores no permiten encender el flash.</p>
@@ -487,9 +489,8 @@ function analyze(){
 
 })();
 </script>
-</script>
 
-
+ 
 <script>if('serviceWorker' in navigator && location.protocol.startsWith('http')){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));}</script>
 </body>
 </html>
